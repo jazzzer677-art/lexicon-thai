@@ -1,0 +1,120 @@
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Config FFA
+local VERTICAL_OFFSET_BODY = 1.5
+local SMOOTH_SPEED = 10
+local LOCK_TARGET_PART = "HumanoidRootPart"
+local STILL_VELOCITY = 1
+local PREDICTION_FACTOR = 0.045
+
+-- Variables
+local lockedTarget = nil
+local aimingEnabled = false
+
+------------------------------------------------------------
+-- GUI ปุ่ม Lock (มือถือ)
+------------------------------------------------------------
+local function createLockGui()
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "AimLockGui"
+	gui.IgnoreGuiInset = true
+	gui.ResetOnSpawn = false
+	gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+	-- ปุ่ม Lock
+	local lockButton = Instance.new("TextButton")
+	lockButton.Name = "LockButton"
+	lockButton.Text = "🔒 Lock: OFF"
+	lockButton.Font = Enum.Font.SourceSansBold
+	lockButton.TextSize = 20
+	lockButton.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+	lockButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	lockButton.Size = UDim2.new(0, 130, 0, 40)
+	lockButton.Position = UDim2.new(0, 20, 0, 50)
+	lockButton.Active = true
+	lockButton.Draggable = true
+	lockButton.Parent = gui
+
+	lockButton.MouseButton1Click:Connect(function()
+		aimingEnabled = not aimingEnabled
+
+		if aimingEnabled then
+			-- หาเป้าหมายใกล้สุด
+			local nearestDist = math.huge
+			local nearestTarget = nil
+			for _, player in pairs(Players:GetPlayers()) do
+				if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(LOCK_TARGET_PART) then
+					local part = player.Character[LOCK_TARGET_PART]
+					local screenPos, onScreen = Camera:WorldToViewportPoint(part.Position)
+					if onScreen then
+						local dist = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+						if dist < nearestDist then
+							nearestDist = dist
+							nearestTarget = part
+						end
+					end
+				end
+			end
+			lockedTarget = nearestTarget
+		else
+			lockedTarget = nil
+		end
+
+		lockButton.Text = aimingEnabled and "✅ Lock: ON" or "🔒 Lock: OFF"
+		lockButton.BackgroundColor3 = aimingEnabled and Color3.fromRGB(60,150,60) or Color3.fromRGB(40,40,40)
+	end)
+end
+
+createLockGui()
+
+LocalPlayer.CharacterAdded:Connect(function()
+	task.wait(1)
+	if not LocalPlayer:FindFirstChild("PlayerGui"):FindFirstChild("AimLockGui") then
+		createLockGui()
+	end
+end)
+
+------------------------------------------------------------
+-- คำนวณตำแหน่งเล็งตรงตัว + Prediction
+------------------------------------------------------------
+local function getAimPosition(targetPart)
+	if not targetPart then return nil end
+	local char = targetPart.Parent
+	if not char then return targetPart.Position end
+
+	local hrp = char:FindFirstChild(LOCK_TARGET_PART)
+	if not hrp then return targetPart.Position end
+
+	local pos = hrp.Position
+	local vel = hrp.Velocity
+	local up = Vector3.new(0,1,0)
+
+	-- เพิ่มความสูงถ้ากระโดด
+	local vertical = VERTICAL_OFFSET_BODY
+	if char.Humanoid:GetState() == Enum.HumanoidStateType.Jumping then
+		vertical = vertical + 1
+	end
+
+	-- Prediction: คำนวณตำแหน่งล่วงหน้า
+	local predictedPos = pos + vel * PREDICTION_FACTOR
+
+	return predictedPos + up * vertical
+end
+
+------------------------------------------------------------
+-- Render อัปเดตทุกเฟรม
+------------------------------------------------------------
+RunService.RenderStepped:Connect(function(dt)
+	if aimingEnabled and lockedTarget and lockedTarget.Parent then
+		local aimPos = getAimPosition(lockedTarget)
+		if aimPos then
+			local camPos = Camera.CFrame.Position
+			local desired = CFrame.new(camPos, aimPos)
+			Camera.CFrame = Camera.CFrame:Lerp(desired, math.clamp(SMOOTH_SPEED * dt,0,1))
+		end
+	end
+end)
