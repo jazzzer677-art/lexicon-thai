@@ -1,0 +1,126 @@
+-- Services
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Silent Aim Settings
+local Silent = getgenv().Silent
+local Settings = Silent.Settings
+
+local currentESP = nil
+
+------------------------------------------------------------
+-- หาเป้าหมายใกล้สุด (ตรวจ WallCheck และ FriendCheck)
+------------------------------------------------------------
+local function getNearestTarget()
+	local nearestDist = math.huge
+	local nearestTarget = nil
+	for _, player in pairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(Settings.AimPart) then
+			if Settings.FriendCheck and LocalPlayer.Team == player.Team then continue end
+
+			local hrp = player.Character[Settings.AimPart]
+			local dist = (hrp.Position - Camera.CFrame.Position).Magnitude
+
+			if dist < nearestDist then
+				nearestDist = dist
+				nearestTarget = hrp
+			end
+		end
+	end
+	return nearestTarget
+end
+
+------------------------------------------------------------
+-- คำนวณตำแหน่ง Silent Aim + Prediction
+------------------------------------------------------------
+local function getSilentAimPosition(targetPart)
+	if not targetPart then return nil end
+
+	local pos = targetPart.Position
+	local vel = targetPart.Velocity
+	local pred = Settings.Prediction.Toggled and Settings.Prediction.Value or 0
+
+	local predictedPos = pos + vel * pred
+
+	-- ถ้าตั้ง JumpOffset
+	if Settings.Prediction.JumpOffset and targetPart.Parent.Humanoid:GetState() == Enum.HumanoidStateType.Jumping then
+		predictedPos = predictedPos + Vector3.new(0, Settings.Prediction.JumpOffset, 0)
+	end
+
+	return predictedPos
+end
+
+------------------------------------------------------------
+-- สร้าง ESP สำหรับเป้าหมาย
+------------------------------------------------------------
+local function createESP(targetPart)
+	if currentESP then currentESP:Destroy() end
+	if not targetPart then return end
+
+	local box = Instance.new("BoxHandleAdornment")
+	box.Adornee = targetPart
+	box.AlwaysOnTop = true
+	box.ZIndex = 10
+	box.Size = Vector3.new(2,2,1)
+	box.Color3 = Settings.RainbowTarget and Color3.fromHSV(tick()%5/5,1,1) or Color3.fromRGB(255,0,0)
+	box.Transparency = 0.3
+	box.Parent = targetPart
+
+	currentESP = box
+end
+
+------------------------------------------------------------
+-- ยิงกระสุน (AutoShoot)
+------------------------------------------------------------
+local function fireWeapon()
+	if not Settings.Toggled then return end
+	local target = getNearestTarget()
+	if target then
+		local aimPos = getSilentAimPosition(target)
+		if aimPos then
+			-- ยิงจริงของเกม: แทนที่ด้วย RemoteEvent ของเกม
+			-- game.ReplicatedStorage.WeaponFire:FireServer(aimPos)
+
+			if Settings.AutoShoot then
+				print("Silent Aim Fire at:", aimPos)
+			end
+
+			-- สร้าง ESP สำหรับเป้าหมาย
+			createESP(target)
+		end
+	end
+end
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		fireWeapon()
+	end
+end)
+
+------------------------------------------------------------
+-- อัปเดต ESP ทุกเฟรม
+------------------------------------------------------------
+RunService.RenderStepped:Connect(function()
+	if Settings.Toggled then
+		local target = getNearestTarget()
+		if target then
+			if not currentESP or currentESP.Adornee ~= target then
+				createESP(target)
+			end
+		else
+			if currentESP then
+				currentESP:Destroy()
+				currentESP = nil
+			end
+		end
+	else
+		if currentESP then
+			currentESP:Destroy()
+			currentESP = nil
+		end
+	end
+end)
