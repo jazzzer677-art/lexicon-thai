@@ -11,39 +11,35 @@ local UserInputService = game:GetService("UserInputService")
 -- ==============================
 local LOCK_FOV = 250
 local PREDICTION = 0.1
-local AIM_SMOOTH = 0.2 -- ความเรียบของการหมุนกล้อง (0-1)
+local AIM_SMOOTH = 0.2 -- ความเรียบของการหมุนกล้อง
 
--- Colors & Thickness
+-- Colors
 local HIGHLIGHT_COLOR = Color3.fromRGB(175,25,255)
 local FILL_TRANSPARENCY = 0.5
-local TRACER_COLOR = Color3.fromRGB(255,0,0)
-local TRACER_THICKNESS = 2
+local BEAM_COLOR = Color3.fromRGB(255,0,0)
+local BEAM_WIDTH = 0.15
 
 -- RemoteEvent ของเกม (เปลี่ยนให้ตรงเกม)
 local FireEventName = "FireEvent"
 local FireEvent = ReplicatedStorage:FindFirstChild(FireEventName)
 
 -- ==============================
--- GUI Variables / Flags
+-- Flags / GUI
 -- ==============================
 local showHighlight = true
-local showTracers = true
-local enableAimbot = false     -- จะถูกเปิดเมื่อกดคลิกขวา
+local enableAimbot = false     -- hold คลิกขวา
 local enableSilentAim = true
+local enableBeamTracers = true
 
 -- ==============================
--- Storage
+-- Highlight Function
 -- ==============================
 local Storage = Instance.new("Folder")
 Storage.Name = "Highlight_Storage"
 Storage.Parent = game:GetService("CoreGui")
 
-local tracerLines = {}
 local highlightConnections = {}
 
--- ==============================
--- Highlight Function
--- ==============================
 local function HighlightPlayer(plr)
     local highlight = Instance.new("Highlight")
     highlight.Name = plr.Name
@@ -74,37 +70,66 @@ end)
 Players.PlayerRemoving:Connect(function(plr)
     if Storage:FindFirstChild(plr.Name) then Storage[plr.Name]:Destroy() end
     if highlightConnections[plr] then highlightConnections[plr]:Disconnect() end
-    if tracerLines[plr] then tracerLines[plr]:Destroy() end
 end)
 
 -- ==============================
--- Tracers Setup
+-- Beam Tracers Function
 -- ==============================
-local screenGui = Instance.new("ScreenGui")
-screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-screenGui.ResetOnSpawn = false
+local function AssignTracers()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local PlayerChar = workspace:FindFirstChild(player.Name)
+            local LocalChar = LocalPlayer.Character
+            if not PlayerChar or not LocalChar or not LocalChar:FindFirstChild("HumanoidRootPart") then
+                return
+            end
 
-local function CreateTracer(plr)
-    local line = Instance.new("Frame")
-    line.Size = UDim2.new(0, TRACER_THICKNESS, 0, 0)
-    line.BackgroundColor3 = TRACER_COLOR
-    line.BorderSizePixel = 0
-    line.AnchorPoint = Vector2.new(0.5, 0)
-    line.Visible = true
-    line.Parent = screenGui
-    tracerLines[plr] = line
+            local beam
+            if PlayerChar:FindFirstChild("ESPBeam") then
+                beam = PlayerChar:FindFirstChild("ESPBeam")
+                if beam then
+                    beam.Enabled = enableBeamTracers
+                    if not beam.Attachment0 then
+                        local attachment0 = Instance.new("Attachment", LocalChar:WaitForChild("HumanoidRootPart"))
+                        beam.Attachment0 = attachment0
+                    end
+                end
+            end
+
+            if not beam and enableBeamTracers then
+                local attachment0 = Instance.new("Attachment", LocalChar:WaitForChild("HumanoidRootPart"))
+                local attachment1 = Instance.new("Attachment", PlayerChar:WaitForChild("HumanoidRootPart"))
+
+                beam = Instance.new("Beam")
+                beam.Name = "ESPBeam"
+                beam.Attachment0 = attachment0
+                beam.Attachment1 = attachment1
+                beam.Color = ColorSequence.new(BEAM_COLOR)
+                beam.FaceCamera = true
+                beam.Width0 = BEAM_WIDTH
+                beam.Width1 = BEAM_WIDTH
+                beam.Parent = PlayerChar
+            end
+        end
+    end
 end
 
-for _,plr in pairs(Players:GetPlayers()) do
-    if plr ~= LocalPlayer then CreateTracer(plr) end
-end
+AssignTracers()
 
-Players.PlayerAdded:Connect(function(plr)
-    if plr ~= LocalPlayer then CreateTracer(plr) end
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        wait(1)
+        AssignTracers()
+    end)
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    wait(1)
+    AssignTracers()
 end)
 
 -- ==============================
--- Target Lock + Silent Aim
+-- Target Lock + Silent Aim + Aimbot
 -- ==============================
 local function GetClosestTarget()
     local closestPlayer = nil
@@ -132,7 +157,6 @@ local function ShootTarget(target)
         local hrp = target.Character:FindFirstChild("HumanoidRootPart") or target.Character:FindFirstChild("Head")
         if hrp then
             local predictedPos = hrp.Position + (hrp.Velocity * PREDICTION)
-            -- ส่งตำแหน่งไปให้ Server ยิง (ขึ้นกับ RemoteEvent เกม)
             FireEvent:FireServer(predictedPos)
         end
     end
@@ -146,7 +170,7 @@ local function AimAtTarget(target)
             local dir = (targetPos - Camera.CFrame.Position)
             if dir.Magnitude > 0 then
                 local lookCFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + dir.Unit)
-                Camera.CFrame = Camera.CFrame:Lerp(lookCFrame, math.clamp(AIM_SMOOTH, 0, 1))
+                Camera.CFrame = Camera.CFrame:Lerp(lookCFrame, math.clamp(AIM_SMOOTH,0,1))
             end
         end
     end
@@ -155,76 +179,3 @@ end
 -- ==============================
 -- RenderStepped Update
 -- ==============================
-RunService.RenderStepped:Connect(function()
-    local centerX, centerY = Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2
-    local target = GetClosestTarget()
-
-    -- Update Tracers
-    for plr, line in pairs(tracerLines) do
-        if plr.Character and showTracers then
-            local hrp = plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Head")
-            if hrp then
-                local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
-                if onScreen then
-                    line.Visible = true
-                    local startPos = Vector2.new(centerX, centerY)
-                    local endPos = Vector2.new(screenPos.X, screenPos.Y)
-                    local distance = (endPos - startPos).Magnitude
-                    line.Size = UDim2.new(0, TRACER_THICKNESS, 0, distance)
-                    local angle = math.atan2(endPos.Y - startPos.Y, endPos.X - startPos.X)
-                    line.Rotation = math.deg(angle) + 90
-                    line.Position = UDim2.new(0, startPos.X, 0, startPos.Y)
-                else
-                    line.Visible = false
-                end
-            else
-                line.Visible = false
-            end
-        else
-            if line then line.Visible = false end
-        end
-    end
-
-    -- Aimbot (หมุนกล้องเมื่อ enableAimbot = true)
-    AimAtTarget(target)
-
-    -- Silent Aim ยิง
-    ShootTarget(target)
-end)
-
--- ==============================
--- Input Handling: คลิกขวาเพื่อ Aimbot (hold) และปุ่มอื่น ๆ สำหรับ toggle
--- ==============================
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-
-    -- คลิกขวาเริ่มเปิด Aimbot (hold)
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        enableAimbot = true
-    end
-
-    -- Key toggles
-    if input.KeyCode == Enum.KeyCode.H then
-        showHighlight = not showHighlight
-        for _,hl in pairs(Storage:GetChildren()) do
-            if hl:IsA("Highlight") then
-                hl.Enabled = showHighlight
-            end
-        end
-    elseif input.KeyCode == Enum.KeyCode.T then
-        showTracers = not showTracers
-    elseif input.KeyCode == Enum.KeyCode.S then
-        enableSilentAim = not enableSilentAim
-    end
-end)
-
-UserInputService.InputEnded:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-
-    -- ปล่อยคลิกขวา = ปิด Aimbot
-    if input.UserInputType == Enum.UserInputType.MouseButton2 then
-        enableAimbot = false
-    end
-end)
-
--- หมายเหตุ: คุณสามารถกด H/T/S เพื่อ สลับ Highlight/Tracers/SilentAim ตามต้องการ
