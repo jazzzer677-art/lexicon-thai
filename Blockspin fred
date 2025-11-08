@@ -4,14 +4,16 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
+local UserInputService = game:GetService("UserInputService")
 
 -- ==============================
 -- Settings
 -- ==============================
 local LOCK_FOV = 250
 local PREDICTION = 0.1
-local AUTO_SHOOT = true
+local AIM_SMOOTH = 0.2 -- ความเรียบของการหมุนกล้อง (0-1)
 
+-- Colors & Thickness
 local HIGHLIGHT_COLOR = Color3.fromRGB(175,25,255)
 local FILL_TRANSPARENCY = 0.5
 local TRACER_COLOR = Color3.fromRGB(255,0,0)
@@ -20,6 +22,14 @@ local TRACER_THICKNESS = 2
 -- RemoteEvent ของเกม (เปลี่ยนให้ตรงเกม)
 local FireEventName = "FireEvent"
 local FireEvent = ReplicatedStorage:FindFirstChild(FireEventName)
+
+-- ==============================
+-- GUI Variables / Flags
+-- ==============================
+local showHighlight = true
+local showTracers = true
+local enableAimbot = false     -- จะถูกเปิดเมื่อกดคลิกขวา
+local enableSilentAim = true
 
 -- ==============================
 -- Storage
@@ -32,7 +42,7 @@ local tracerLines = {}
 local highlightConnections = {}
 
 -- ==============================
--- Function Highlight
+-- Highlight Function
 -- ==============================
 local function HighlightPlayer(plr)
     local highlight = Instance.new("Highlight")
@@ -118,11 +128,26 @@ local function GetClosestTarget()
 end
 
 local function ShootTarget(target)
-    if FireEvent and target and target.Character then
+    if enableSilentAim and FireEvent and target and target.Character then
         local hrp = target.Character:FindFirstChild("HumanoidRootPart") or target.Character:FindFirstChild("Head")
         if hrp then
             local predictedPos = hrp.Position + (hrp.Velocity * PREDICTION)
+            -- ส่งตำแหน่งไปให้ Server ยิง (ขึ้นกับ RemoteEvent เกม)
             FireEvent:FireServer(predictedPos)
+        end
+    end
+end
+
+local function AimAtTarget(target)
+    if enableAimbot and target and target.Character and Camera then
+        local hrp = target.Character:FindFirstChild("HumanoidRootPart") or target.Character:FindFirstChild("Head")
+        if hrp then
+            local targetPos = hrp.Position + hrp.Velocity * PREDICTION
+            local dir = (targetPos - Camera.CFrame.Position)
+            if dir.Magnitude > 0 then
+                local lookCFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + dir.Unit)
+                Camera.CFrame = Camera.CFrame:Lerp(lookCFrame, math.clamp(AIM_SMOOTH, 0, 1))
+            end
         end
     end
 end
@@ -136,17 +161,19 @@ RunService.RenderStepped:Connect(function()
 
     -- Update Tracers
     for plr, line in pairs(tracerLines) do
-        if plr.Character then
+        if plr.Character and showTracers then
             local hrp = plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Head")
             if hrp then
                 local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
                 if onScreen then
                     line.Visible = true
-                    local distance = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(centerX, centerY)).Magnitude
+                    local startPos = Vector2.new(centerX, centerY)
+                    local endPos = Vector2.new(screenPos.X, screenPos.Y)
+                    local distance = (endPos - startPos).Magnitude
                     line.Size = UDim2.new(0, TRACER_THICKNESS, 0, distance)
-                    local angle = math.atan2(screenPos.Y - centerY, screenPos.X - centerX)
+                    local angle = math.atan2(endPos.Y - startPos.Y, endPos.X - startPos.X)
                     line.Rotation = math.deg(angle) + 90
-                    line.Position = UDim2.new(0, centerX, 0, centerY)
+                    line.Position = UDim2.new(0, startPos.X, 0, startPos.Y)
                 else
                     line.Visible = false
                 end
@@ -154,12 +181,50 @@ RunService.RenderStepped:Connect(function()
                 line.Visible = false
             end
         else
-            line.Visible = false
+            if line then line.Visible = false end
         end
     end
 
-    -- Auto Shoot
-    if AUTO_SHOOT and target then
-        ShootTarget(target)
+    -- Aimbot (หมุนกล้องเมื่อ enableAimbot = true)
+    AimAtTarget(target)
+
+    -- Silent Aim ยิง
+    ShootTarget(target)
+end)
+
+-- ==============================
+-- Input Handling: คลิกขวาเพื่อ Aimbot (hold) และปุ่มอื่น ๆ สำหรับ toggle
+-- ==============================
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+
+    -- คลิกขวาเริ่มเปิด Aimbot (hold)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        enableAimbot = true
+    end
+
+    -- Key toggles
+    if input.KeyCode == Enum.KeyCode.H then
+        showHighlight = not showHighlight
+        for _,hl in pairs(Storage:GetChildren()) do
+            if hl:IsA("Highlight") then
+                hl.Enabled = showHighlight
+            end
+        end
+    elseif input.KeyCode == Enum.KeyCode.T then
+        showTracers = not showTracers
+    elseif input.KeyCode == Enum.KeyCode.S then
+        enableSilentAim = not enableSilentAim
     end
 end)
+
+UserInputService.InputEnded:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+
+    -- ปล่อยคลิกขวา = ปิด Aimbot
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        enableAimbot = false
+    end
+end)
+
+-- หมายเหตุ: คุณสามารถกด H/T/S เพื่อ สลับ Highlight/Tracers/SilentAim ตามต้องการ
