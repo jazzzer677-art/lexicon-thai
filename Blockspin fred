@@ -11,171 +11,264 @@ local UserInputService = game:GetService("UserInputService")
 -- ==============================
 local LOCK_FOV = 250
 local PREDICTION = 0.1
-local AIM_SMOOTH = 0.2 -- ความเรียบของการหมุนกล้อง
+local AIM_SMOOTH = 0.20 -- 0..1 (ความเรียบของการหมุนกล้อง)
 
--- Colors
+-- Colors / beam
 local HIGHLIGHT_COLOR = Color3.fromRGB(175,25,255)
 local FILL_TRANSPARENCY = 0.5
 local BEAM_COLOR = Color3.fromRGB(255,0,0)
 local BEAM_WIDTH = 0.15
 
--- RemoteEvent ของเกม (เปลี่ยนให้ตรงเกม)
-local FireEventName = "FireEvent"
-local FireEvent = ReplicatedStorage:FindFirstChild(FireEventName)
+-- RemoteEvent search name (ถ้ารู้ชื่อให้ใส่ตรงนี้)
+local FireEventName = "FireEvent" 
 
 -- ==============================
--- Flags / GUI
+-- Flags (เริ่มค่า)
 -- ==============================
 local showHighlight = true
-local enableAimbot = false     -- hold คลิกขวา
+local enableAimbot = false       -- จะ toggle ด้วยคลิกขวา
 local enableSilentAim = true
-local enableBeamTracers = true
+local enableBeamTracer = true
 
 -- ==============================
--- Highlight Function
+-- Helpers: หา RemoteEvent ยืดหยุ่น
+-- ==============================
+local function findRemoteEvent(name)
+    -- ถ้ามีชื่อชัดเจนให้ลองหาใน ReplicatedStorage ก่อน
+    if ReplicatedStorage:FindFirstChild(name) and ReplicatedStorage[name]:IsA("RemoteEvent") then
+        return ReplicatedStorage[name]
+    end
+    -- สแกนตำแหน่งสำคัญอื่น ๆ
+    local containers = {ReplicatedStorage, workspace, LocalPlayer:FindFirstChild("PlayerGui") or nil, game:GetService("StarterGui")}
+    for _, container in pairs(containers) do
+        if container then
+            for _, obj in pairs(container:GetDescendants()) do
+                if obj:IsA("RemoteEvent") and obj.Name:lower():find(name:lower()) then
+                    return obj
+                end
+            end
+        end
+    end
+    -- ถ้าไม่เจอ ให้สแกนทั้งหมดใน ReplicatedStorage/Workspace และพิมพ์ชื่อเพื่อช่วยดีบัก
+    for _, obj in pairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("RemoteEvent") then
+            print("[RemoteEvent found in ReplicatedStorage] " .. obj:GetFullName())
+        end
+    end
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("RemoteEvent") then
+            print("[RemoteEvent found in Workspace] " .. obj:GetFullName())
+        end
+    end
+    return nil
+end
+
+local FireEvent = findRemoteEvent(FireEventName)
+if not FireEvent then
+    warn("FireEvent not found automatically. If SilentAim doesn't work, set FireEventName to the game's RemoteEvent name.")
+end
+
+-- ==============================
+-- Highlight setup
 -- ==============================
 local Storage = Instance.new("Folder")
 Storage.Name = "Highlight_Storage"
 Storage.Parent = game:GetService("CoreGui")
 
 local highlightConnections = {}
-
-local function HighlightPlayer(plr)
-    local highlight = Instance.new("Highlight")
-    highlight.Name = plr.Name
-    highlight.FillColor = HIGHLIGHT_COLOR
-    highlight.FillTransparency = FILL_TRANSPARENCY
-    highlight.OutlineColor = Color3.fromRGB(255,255,255)
-    highlight.OutlineTransparency = 0
-    highlight.DepthMode = Enum.HighlightDepthMode.Occluded
-    highlight.Parent = Storage
-
-    if plr.Character then
-        highlight.Adornee = plr.Character
-    end
-
-    highlightConnections[plr] = plr.CharacterAdded:Connect(function(char)
-        highlight.Adornee = char
-    end)
+local function createHighlightFor(plr)
+    if highlightConnections[plr] then return end
+    local hl = Instance.new("Highlight")
+    hl.Name = plr.Name
+    hl.FillColor = HIGHLIGHT_COLOR
+    hl.FillTransparency = FILL_TRANSPARENCY
+    hl.OutlineColor = Color3.fromRGB(255,255,255)
+    hl.OutlineTransparency = 0
+    hl.DepthMode = Enum.HighlightDepthMode.Occluded
+    hl.Parent = Storage
+    if plr.Character then hl.Adornee = plr.Character end
+    highlightConnections[plr] = plr.CharacterAdded:Connect(function(char) hl.Adornee = char end)
 end
 
 for _,plr in pairs(Players:GetPlayers()) do
-    if plr ~= LocalPlayer then HighlightPlayer(plr) end
+    if plr ~= LocalPlayer then createHighlightFor(plr) end
 end
-
-Players.PlayerAdded:Connect(function(plr)
-    if plr ~= LocalPlayer then HighlightPlayer(plr) end
-end)
-
+Players.PlayerAdded:Connect(function(plr) if plr ~= LocalPlayer then createHighlightFor(plr) end end)
 Players.PlayerRemoving:Connect(function(plr)
     if Storage:FindFirstChild(plr.Name) then Storage[plr.Name]:Destroy() end
     if highlightConnections[plr] then highlightConnections[plr]:Disconnect() end
 end)
 
 -- ==============================
--- Beam Tracers Function
+-- Beam tracer (ONE beam to closest target)
 -- ==============================
-local function AssignTracers()
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            local PlayerChar = workspace:FindFirstChild(player.Name)
-            local LocalChar = LocalPlayer.Character
-            if not PlayerChar or not LocalChar or not LocalChar:FindFirstChild("HumanoidRootPart") then
-                return
-            end
-
-            local beam
-            if PlayerChar:FindFirstChild("ESPBeam") then
-                beam = PlayerChar:FindFirstChild("ESPBeam")
-                if beam then
-                    beam.Enabled = enableBeamTracers
-                    if not beam.Attachment0 then
-                        local attachment0 = Instance.new("Attachment", LocalChar:WaitForChild("HumanoidRootPart"))
-                        beam.Attachment0 = attachment0
-                    end
-                end
-            end
-
-            if not beam and enableBeamTracers then
-                local attachment0 = Instance.new("Attachment", LocalChar:WaitForChild("HumanoidRootPart"))
-                local attachment1 = Instance.new("Attachment", PlayerChar:WaitForChild("HumanoidRootPart"))
-
-                beam = Instance.new("Beam")
-                beam.Name = "ESPBeam"
-                beam.Attachment0 = attachment0
-                beam.Attachment1 = attachment1
-                beam.Color = ColorSequence.new(BEAM_COLOR)
-                beam.FaceCamera = true
-                beam.Width0 = BEAM_WIDTH
-                beam.Width1 = BEAM_WIDTH
-                beam.Parent = PlayerChar
-            end
-        end
+local currentBeam = nil
+local currentAttachment0 = nil
+local currentAttachment1 = nil
+local function updateBeamToTarget(target)
+    -- clean previous attachments if target changed
+    if currentBeam and currentBeam.Parent and (not target or target.Character ~= currentBeam.Parent) then
+        -- destroy beam on old target character
+        currentBeam:Destroy()
+        currentBeam = nil
+        currentAttachment0 = nil
+        currentAttachment1 = nil
     end
+
+    if not enableBeamTracer or not target or not target.Character or not LocalPlayer.Character then
+        return
+    end
+
+    local localHRP = LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Head")
+    local targHRP = target.Character:FindFirstChild("HumanoidRootPart") or target.Character:FindFirstChild("Head")
+    if not localHRP or not targHRP then return end
+
+    -- If beam exists and parent is same target, ensure attachments set
+    if currentBeam and currentBeam.Parent == target.Character then
+        if not currentBeam.Attachment0 then
+            currentAttachment0 = Instance.new("Attachment", localHRP)
+            currentBeam.Attachment0 = currentAttachment0
+        end
+        if not currentBeam.Attachment1 then
+            currentAttachment1 = Instance.new("Attachment", targHRP)
+            currentBeam.Attachment1 = currentAttachment1
+        end
+        currentBeam.Enabled = true
+        return
+    end
+
+    -- create new beam attached to target
+    if target.Character:FindFirstChild("ESPBeam") then
+        currentBeam = target.Character:FindFirstChild("ESPBeam")
+        -- attach attachment0 if missing
+        if not currentBeam.Attachment0 then
+            currentAttachment0 = Instance.new("Attachment", localHRP)
+            currentBeam.Attachment0 = currentAttachment0
+        else
+            currentAttachment0 = currentBeam.Attachment0
+        end
+        if not currentBeam.Attachment1 then
+            currentAttachment1 = Instance.new("Attachment", targHRP)
+            currentBeam.Attachment1 = currentAttachment1
+        else
+            currentAttachment1 = currentBeam.Attachment1
+        end
+        currentBeam.Enabled = enableBeamTracer
+        return
+    end
+
+    -- create attachments and beam
+    currentAttachment0 = Instance.new("Attachment", localHRP)
+    currentAttachment1 = Instance.new("Attachment", targHRP)
+    currentBeam = Instance.new("Beam")
+    currentBeam.Name = "ESPBeam"
+    currentBeam.Attachment0 = currentAttachment0
+    currentBeam.Attachment1 = currentAttachment1
+    currentBeam.Color = ColorSequence.new(BEAM_COLOR)
+    currentBeam.FaceCamera = true
+    currentBeam.Width0 = BEAM_WIDTH
+    currentBeam.Width1 = BEAM_WIDTH
+    currentBeam.Parent = target.Character
+    currentBeam.Enabled = enableBeamTracer
 end
 
-AssignTracers()
-
-Players.PlayerAdded:Connect(function(player)
-    player.CharacterAdded:Connect(function()
-        wait(1)
-        AssignTracers()
-    end)
-end)
-
-LocalPlayer.CharacterAdded:Connect(function()
-    wait(1)
-    AssignTracers()
-end)
-
 -- ==============================
--- Target Lock + Silent Aim + Aimbot
+-- Target selection: closest in screen FOV (and within distance optional)
 -- ==============================
+local MAX_DISTANCE = 1000 -- ถ้ต้องการจำกัดระยะ สามารถปรับ
 local function GetClosestTarget()
-    local closestPlayer = nil
-    local closestDistance = math.huge
+    local closest = nil
+    local closestDist = math.huge
     for _,plr in pairs(Players:GetPlayers()) do
-        if plr ~= LocalPlayer and plr.Character then
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChildWhichIsA then
             local hrp = plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Head")
             if hrp then
                 local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
                 if onScreen then
-                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
-                    if dist < closestDistance and dist <= LOCK_FOV then
-                        closestDistance = dist
-                        closestPlayer = plr
+                    local dist2d = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+                    local worldDist = (hrp.Position - (LocalPlayer.Character and (LocalPlayer.Character:FindFirstChild("HumanoidRootPart") or LocalPlayer.Character:FindFirstChild("Head")).Position or Vector3.new())).Magnitude
+                    if dist2d < closestDist and dist2d <= LOCK_FOV and worldDist <= MAX_DISTANCE then
+                        closestDist = dist2d
+                        closest = plr
                     end
                 end
             end
         end
     end
-    return closestPlayer
-end
-
-local function ShootTarget(target)
-    if enableSilentAim and FireEvent and target and target.Character then
-        local hrp = target.Character:FindFirstChild("HumanoidRootPart") or target.Character:FindFirstChild("Head")
-        if hrp then
-            local predictedPos = hrp.Position + (hrp.Velocity * PREDICTION)
-            FireEvent:FireServer(predictedPos)
-        end
-    end
-end
-
-local function AimAtTarget(target)
-    if enableAimbot and target and target.Character and Camera then
-        local hrp = target.Character:FindFirstChild("HumanoidRootPart") or target.Character:FindFirstChild("Head")
-        if hrp then
-            local targetPos = hrp.Position + hrp.Velocity * PREDICTION
-            local dir = (targetPos - Camera.CFrame.Position)
-            if dir.Magnitude > 0 then
-                local lookCFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + dir.Unit)
-                Camera.CFrame = Camera.CFrame:Lerp(lookCFrame, math.clamp(AIM_SMOOTH,0,1))
-            end
-        end
-    end
+    return closest
 end
 
 -- ==============================
--- RenderStepped Update
+-- Aimbot, Silent Aim
 -- ==============================
+local function AimAt(target)
+    if not enableAimbot or not target or not target.Character or not Camera then return end
+    local hrp = target.Character:FindFirstChild("HumanoidRootPart") or target.Character:FindFirstChild("Head")
+    if not hrp then return end
+    local targetPos = hrp.Position + hrp.Velocity * PREDICTION
+    local dir = (targetPos - Camera.CFrame.Position)
+    if dir.Magnitude > 0 then
+        local lookCFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + dir.Unit)
+        Camera.CFrame = Camera.CFrame:Lerp(lookCFrame, math.clamp(AIM_SMOOTH, 0, 1))
+    end
+end
+
+local function ShootAt(target)
+    if not enableSilentAim or not FireEvent then return end
+    if not target or not target.Character then return end
+    local hrp = target.Character:FindFirstChild("HumanoidRootPart") or target.Character:FindFirstChild("Head")
+    if not hrp then return end
+    local predictedPos = hrp.Position + hrp.Velocity * PREDICTION
+    -- FireServer (รูปแบบการส่งขึ้นกับเกม — อาจต้องแก้ให้ตรง)
+    FireEvent:FireServer(predictedPos)
+end
+
+-- ==============================
+-- Main loop
+-- ==============================
+RunService.RenderStepped:Connect(function()
+    -- หาเป้าใกล้ที่สุด (ใช้ร่วมสำหรับ aimbot และ beam)
+    local target = GetClosestTarget()
+
+    -- update beam ONLY to the current closest target (single beam)
+    if enableBeamTracer then
+        updateBeamToTarget(target)
+    else
+        -- ถ้าปิด beam ให้ทำความสะอาด
+        if currentBeam then
+            currentBeam:Destroy()
+            currentBeam = nil
+            currentAttachment0 = nil
+            currentAttachment1 = nil
+        end
+    end
+
+    -- aim + shoot
+    AimAt(target)
+    ShootAt(target)
+end)
+
+-- ==============================
+-- Input: คลิกขวาเป็น toggle Aimbot, ปุ่มอื่น toggle features
+-- ==============================
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        -- Toggle (กดขวาครั้งนึงเปิดอีกครั้งปิด)
+        enableAimbot = not enableAimbot
+    elseif input.KeyCode == Enum.KeyCode.H then
+        showHighlight = not showHighlight
+        for _,hl in pairs(Storage:GetChildren()) do
+            if hl:IsA("Highlight") then hl.Enabled = showHighlight end
+        end
+    elseif input.KeyCode == Enum.KeyCode.S then
+        enableSilentAim = not enableSilentAim
+        print("SilentAim = ", enableSilentAim)
+    elseif input.KeyCode == Enum.KeyCode.B then
+        enableBeamTracer = not enableBeamTracer
+        if not enableBeamTracer and currentBeam then
+            currentBeam:Destroy()
+            currentBeam = nil
+        end
+    end
+end)
