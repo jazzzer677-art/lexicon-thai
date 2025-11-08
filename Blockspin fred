@@ -1,0 +1,188 @@
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- ==============================
+-- Settings
+-- ==============================
+local LOCK_FOV = 250         -- FOV สำหรับ Target Lock
+local PREDICTION = 0.1       -- คาดเดาตำแหน่งเป้าหมาย
+local AUTO_SHOOT = true       -- ยิงอัตโนมัติ
+local HIGHLIGHT_COLOR = Color3.fromRGB(175,25,255)
+local FILL_TRANSPARENCY = 0.5
+local TRACER_COLOR = Color3.fromRGB(255,0,0)
+local TRACER_THICKNESS = 2
+
+-- RemoteEvent ของเกม (เปลี่ยนให้ตรงเกม)
+local FireEventName = "FireEvent" -- แทนชื่อ RemoteEvent จริง
+local FireEvent = ReplicatedStorage:FindFirstChild(FireEventName)
+
+-- ==============================
+-- Storage & Tables
+-- ==============================
+local Storage = Instance.new("Folder")
+Storage.Name = "Highlight_Storage"
+Storage.Parent = game:GetService("CoreGui")
+
+local tracerLines = {}
+local highlightConnections = {}
+
+-- ==============================
+-- Highlight Function
+-- ==============================
+local function HighlightPlayer(plr)
+    local highlight = Instance.new("Highlight")
+    highlight.Name = plr.Name
+    highlight.FillColor = HIGHLIGHT_COLOR
+    highlight.FillTransparency = FILL_TRANSPARENCY
+    highlight.OutlineColor = Color3.fromRGB(255,255,255)
+    highlight.OutlineTransparency = 0
+    highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+    highlight.Parent = Storage
+    if plr.Character then
+        highlight.Adornee = plr.Character
+    end
+    highlightConnections[plr] = plr.CharacterAdded:Connect(function(char)
+        highlight.Adornee = char
+    end)
+end
+
+for _,plr in pairs(Players:GetPlayers()) do
+    if plr ~= LocalPlayer then HighlightPlayer(plr) end
+end
+
+Players.PlayerAdded:Connect(function(plr)
+    if plr ~= LocalPlayer then HighlightPlayer(plr) end
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+    if Storage:FindFirstChild(plr.Name) then Storage[plr.Name]:Destroy() end
+    if highlightConnections[plr] then highlightConnections[plr]:Disconnect() end
+    if tracerLines[plr] then tracerLines[plr]:Destroy() end
+end)
+
+-- ==============================
+-- Tracers
+-- ==============================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+screenGui.ResetOnSpawn = false
+
+for _,plr in pairs(Players:GetPlayers()) do
+    if plr ~= LocalPlayer then
+        local line = Instance.new("Frame")
+        line.Size = UDim2.new(0, TRACER_THICKNESS, 0, 0)
+        line.BackgroundColor3 = TRACER_COLOR
+        line.BorderSizePixel = 0
+        line.AnchorPoint = Vector2.new(0.5, 0)
+        line.Visible = true
+        line.Parent = screenGui
+        tracerLines[plr] = line
+    end
+end
+
+Players.PlayerAdded:Connect(function(plr)
+    if plr ~= LocalPlayer then
+        local line = Instance.new("Frame")
+        line.Size = UDim2.new(0, TRACER_THICKNESS, 0, 0)
+        line.BackgroundColor3 = TRACER_COLOR
+        line.BorderSizePixel = 0
+        line.AnchorPoint = Vector2.new(0.5, 0)
+        line.Visible = true
+        line.Parent = screenGui
+        tracerLines[plr] = line
+    end
+end)
+
+-- ==============================
+-- Target Lock + Silent Aim
+-- ==============================
+local function GetClosestTarget()
+    local closestPlayer = nil
+    local closestDistance = math.huge
+    for _,plr in pairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local hrp = plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Head")
+            if hrp then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+                if onScreen then
+                    local dist = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2)).Magnitude
+                    if dist < closestDistance and dist <= LOCK_FOV then
+                        closestDistance = dist
+                        closestPlayer = plr
+                    end
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+local function ShootTarget(target)
+    if FireEvent and target and target.Character then
+        local hrp = target.Character:FindFirstChild("HumanoidRootPart") or target.Character:FindFirstChild("Head")
+        if hrp then
+            local predictedPos = hrp.Position + (hrp.Velocity * PREDICTION)
+            FireEvent:FireServer(predictedPos)
+        end
+    end
+end
+
+-- ==============================
+-- Update Loop
+-- ==============================
+RunService.RenderStepped:Connect(function()
+    local centerX, centerY = Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2
+    local target = GetClosestTarget()
+
+    -- Update Tracers
+    for plr, line in pairs(tracerLines) do
+        if plr.Character then
+            local hrp = plr.Character:FindFirstChild("HumanoidRootPart") or plr.Character:FindFirstChild("Head")
+            if hrp then
+                local screenPos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+                if onScreen then
+                    line.Visible = true
+                    local distance = (Vector2.new(screenPos.X, screenPos.Y) - Vector2.new(centerX, centerY)).Magnitude
+                    line.Size = UDim2.new(0, TRACER_THICKNESS, 0, distance)
+                    local angle = math.atan2(screenPos.Y - centerY, screenPos.X - centerX)
+                    line.Rotation = math.deg(angle) + 90
+                    line.Position = UDim2.new(0, centerX, 0, centerY)
+                else
+                    line.Visible = false
+                end
+            else
+                line.Visible = false
+            end
+        else
+            line.Visible = false
+        end
+    end
+
+    -- Auto Shoot
+    if AUTO_SHOOT and target then
+        ShootTarget(target)
+    end
+end)
+
+-- ==============================
+-- Scan RemoteEvent อัตโนมัติ
+-- ==============================
+local function ScanRemoteEvents(container, containerName)
+    for _, obj in pairs(container:GetDescendants()) do
+        if obj:IsA("RemoteEvent") then
+            print("[RemoteEvent] พบใน " .. containerName .. " : " .. obj:GetFullName())
+        end
+    end
+end
+
+print("=== เริ่มสแกน RemoteEvent ===")
+ScanRemoteEvents(ReplicatedStorage, "ReplicatedStorage")
+ScanRemoteEvents(Workspace, "Workspace")
+ScanRemoteEvents(LocalPlayer:WaitForChild("PlayerGui"), "PlayerGui")
+ScanRemoteEvents(game:GetService("StarterGui"), "StarterGui")
+print("=== สแกน RemoteEvent เสร็จสิ้น ===")
