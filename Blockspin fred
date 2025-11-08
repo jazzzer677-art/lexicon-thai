@@ -1,28 +1,28 @@
 -- Services
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 -- ==============================
 -- Settings
 -- ==============================
-local LOCK_FOV = 250         -- FOV สำหรับ Target Lock
-local PREDICTION = 0.1       -- คาดเดาตำแหน่งเป้าหมาย
-local AUTO_SHOOT = true       -- ยิงอัตโนมัติ
+local LOCK_FOV = 250
+local PREDICTION = 0.1
+local AUTO_SHOOT = true
+
 local HIGHLIGHT_COLOR = Color3.fromRGB(175,25,255)
 local FILL_TRANSPARENCY = 0.5
 local TRACER_COLOR = Color3.fromRGB(255,0,0)
 local TRACER_THICKNESS = 2
 
 -- RemoteEvent ของเกม (เปลี่ยนให้ตรงเกม)
-local FireEventName = "FireEvent" -- แทนชื่อ RemoteEvent จริง
+local FireEventName = "FireEvent"
 local FireEvent = ReplicatedStorage:FindFirstChild(FireEventName)
 
 -- ==============================
--- Storage & Tables
+-- Storage
 -- ==============================
 local Storage = Instance.new("Folder")
 Storage.Name = "Highlight_Storage"
@@ -32,7 +32,7 @@ local tracerLines = {}
 local highlightConnections = {}
 
 -- ==============================
--- Highlight Function
+-- Function Highlight
 -- ==============================
 local function HighlightPlayer(plr)
     local highlight = Instance.new("Highlight")
@@ -43,9 +43,11 @@ local function HighlightPlayer(plr)
     highlight.OutlineTransparency = 0
     highlight.DepthMode = Enum.HighlightDepthMode.Occluded
     highlight.Parent = Storage
+
     if plr.Character then
         highlight.Adornee = plr.Character
     end
+
     highlightConnections[plr] = plr.CharacterAdded:Connect(function(char)
         highlight.Adornee = char
     end)
@@ -66,36 +68,29 @@ Players.PlayerRemoving:Connect(function(plr)
 end)
 
 -- ==============================
--- Tracers
+-- Tracers Setup
 -- ==============================
 local screenGui = Instance.new("ScreenGui")
 screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 screenGui.ResetOnSpawn = false
 
+local function CreateTracer(plr)
+    local line = Instance.new("Frame")
+    line.Size = UDim2.new(0, TRACER_THICKNESS, 0, 0)
+    line.BackgroundColor3 = TRACER_COLOR
+    line.BorderSizePixel = 0
+    line.AnchorPoint = Vector2.new(0.5, 0)
+    line.Visible = true
+    line.Parent = screenGui
+    tracerLines[plr] = line
+end
+
 for _,plr in pairs(Players:GetPlayers()) do
-    if plr ~= LocalPlayer then
-        local line = Instance.new("Frame")
-        line.Size = UDim2.new(0, TRACER_THICKNESS, 0, 0)
-        line.BackgroundColor3 = TRACER_COLOR
-        line.BorderSizePixel = 0
-        line.AnchorPoint = Vector2.new(0.5, 0)
-        line.Visible = true
-        line.Parent = screenGui
-        tracerLines[plr] = line
-    end
+    if plr ~= LocalPlayer then CreateTracer(plr) end
 end
 
 Players.PlayerAdded:Connect(function(plr)
-    if plr ~= LocalPlayer then
-        local line = Instance.new("Frame")
-        line.Size = UDim2.new(0, TRACER_THICKNESS, 0, 0)
-        line.BackgroundColor3 = TRACER_COLOR
-        line.BorderSizePixel = 0
-        line.AnchorPoint = Vector2.new(0.5, 0)
-        line.Visible = true
-        line.Parent = screenGui
-        tracerLines[plr] = line
-    end
+    if plr ~= LocalPlayer then CreateTracer(plr) end
 end)
 
 -- ==============================
@@ -133,7 +128,7 @@ local function ShootTarget(target)
 end
 
 -- ==============================
--- Update Loop
+-- RenderStepped Update
 -- ==============================
 RunService.RenderStepped:Connect(function()
     local centerX, centerY = Camera.ViewportSize.X/2, Camera.ViewportSize.Y/2
@@ -168,21 +163,3 @@ RunService.RenderStepped:Connect(function()
         ShootTarget(target)
     end
 end)
-
--- ==============================
--- Scan RemoteEvent อัตโนมัติ
--- ==============================
-local function ScanRemoteEvents(container, containerName)
-    for _, obj in pairs(container:GetDescendants()) do
-        if obj:IsA("RemoteEvent") then
-            print("[RemoteEvent] พบใน " .. containerName .. " : " .. obj:GetFullName())
-        end
-    end
-end
-
-print("=== เริ่มสแกน RemoteEvent ===")
-ScanRemoteEvents(ReplicatedStorage, "ReplicatedStorage")
-ScanRemoteEvents(Workspace, "Workspace")
-ScanRemoteEvents(LocalPlayer:WaitForChild("PlayerGui"), "PlayerGui")
-ScanRemoteEvents(game:GetService("StarterGui"), "StarterGui")
-print("=== สแกน RemoteEvent เสร็จสิ้น ===")
